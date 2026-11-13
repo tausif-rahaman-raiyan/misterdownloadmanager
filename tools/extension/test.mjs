@@ -1877,7 +1877,7 @@ function samplePage(html) {
 // The qualities' menu (video.js; its plain functions run here): the questions' pace and their
 // minute, a row's text, and what a page can never make it do.
 {
-  const source = readFileSync(new URL("../../extension/video.js", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../../extension/video.js", import.meta.url), "utf8");.replace(/\r\n/g, "\n");
   // A function's own source (async with its keyword), by its braces.
   const fn = (name) => {
     let start = source.indexOf(`function ${name}(`);
