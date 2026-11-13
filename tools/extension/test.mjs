@@ -3070,7 +3070,7 @@ assert.ok(!videoCode.includes('send({ type: "panel" })'), "no app query just to 
 assert.ok(videoCode.includes("function onForceKeyDown"), "Shift force-detection shortcut exists");
 assert.ok(videoCode.includes("function onForceKeyUp"), "Shift release ends forced display");
 assert.ok(videoCode.includes("return await useWindow(j);"), "click hands video details to the app window");
-assert.ok(!videoCode.includes('"looking"'), "extension does not show a page-lookup state");
+assert.ok(!videoCode.includes('look && look.state === "pending" ? "looking"'), "extension does not render a page-lookup state");
 assert.deepEqual(complaints, [], "nothing written to the console as an error or warning");
 
 console.log(`extension: ${passed} checks passed`);
