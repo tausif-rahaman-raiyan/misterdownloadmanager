@@ -2045,8 +2045,6 @@ button:focus-visible { outline: none; }
     removeEventListener("pointermove", onMove, true);
     removeEventListener("keydown", onForceKeyDown, true);
     removeEventListener("keyup", onForceKeyUp, true);
-    removeEventListener("playing", onMediaReady, true);
-    removeEventListener("loadedmetadata", onMediaReady, true);
     removeEventListener("keydown", onTab, true);
     root.remove();
     never = true;
