@@ -1230,7 +1230,15 @@ const MPD = (protect) => `<?xml version="1.0"?>
   // The button over a plain file says its type as the address says it: a script's file= value's,
   // none for a script alone (not "PHP").
   const at = video.indexOf("  function fileType(");
-  const fileType = new Function(`const SCRIPT_EXTENSIONS = ${JSON.stringify(scripts)};\n${video.slice(at, video.indexOf("\n  }\n", at) + 4)}\nreturn fileType;`)();
+  const open = video.indexOf("{", at);
+  let depth = 0;
+  let end = -1;
+  for (let i = open; i < video.length; i += 1) {
+    if (video[i] === "{") depth += 1;
+    if (video[i] === "}" && --depth === 0) { end = i + 1; break; }
+  }
+  assert.ok(end > open, "fileType helper has a complete function body");
+  const fileType = new Function(`const SCRIPT_EXTENSIONS = ${JSON.stringify(scripts)};\n${video.slice(at, end)}\nreturn fileType;`)();
   assert.equal(fileType("https://u.test/stream.php?file=FL262-1E01-4.mp4&token=x"), "mp4");
   assert.equal(fileType("https://u.test/remote_control.php?id=1"), "");
   assert.equal(fileType("https://u.test/v/clip.webm?x=1"), "webm");
