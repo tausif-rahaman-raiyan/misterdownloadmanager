@@ -2103,13 +2103,12 @@ function samplePage(html) {
   assert.equal(source.match(/innerHTML/g).length, 1, "markup only for the fixed parts");
   assert.ok(!/insertAdjacentHTML|outerHTML|setInterval/.test(source));
   assert.ok(/send\(\{ type: "video-pick", token: l\.token, choice: i \}\)/.test(fn("pick")), "a pick: the token and the row's number");
-  assert.equal(source.split('"video-lookup"').length, 2, "one lookup message");
-  // #703: asked as the button shows, once it stayed a moment over the same video (previews the
-  // pointer only crosses aren't), one per video for the page's life; a plain file never.
-  assert.ok(fn("startLook").includes('"video-lookup"'), "sent by startLook alone");
-  assert.ok(/if \(lookingFor === v\) return;[^]*setTimeout\(\(\) => \{[^]*if \(video === v && v\.isConnected && pill\.classList\.contains\("shown"\)\) startLook\(describeNow\(v\)\);\s*\}, LOOK_DELAY_MS\)/.test(fn("scheduleLook")), "scheduleLook: after LOOK_DELAY_MS, the same video still shown, not put off by each move");
-  assert.ok(fn("startLook").includes("if (usable(kept)) return kept;"), "one look-up per video, kept");
-  assert.ok(fn("startLook").includes("!STREAM.test(c.d.src)"), "none for a plain file");
+  assert.equal(source.split('"video-lookup"').length, 1, "no page-side video lookup message");
+  // Detection and force-show stay local; a delayed hover check must never query the app.
+  assert.ok(fn("startLook").includes("return null;"), "startLook is inert");
+  assert.ok(!fn("look").includes("send("), "hover detection never communicates with the app");
+  assert.ok(!fn("scheduleLook").includes("send("), "delayed hover detection never communicates with the app");
+  assert.ok(fn("download").includes("return await useWindow(j);"), "only a deliberate click hands off the video");
   // #741: only the pointer really moving shows it (a repeated move, as a browser sends when the
   // page changes under a still pointer on pause or play, doesn't), nor the focus a click gives.
   assert.ok(fn("onMove").startsWith("function onMove(e) {\n    if (e.clientX === pointer.x && e.clientY === pointer.y) return;"), "onMove: a move in place is no move");
@@ -2183,7 +2182,7 @@ function samplePage(html) {
     assert.equal(w.fitsWords(359, 100, 14), false, "under 360 px: the round button only");
     assert.equal(w.fitsWords(400, 380, 14), false, "a long language that wouldn't fit");
   }
-  ok("video.js: the qualities' menu follows a lookup one question at a time for a minute; rows as text, the user's own clicks and keys; its words, #703's early look-up, #741's moves");
+  ok("video.js: local detection, deliberate app handoff, guarded menu actions and pointer behavior");
 }
 
 // No other download manager's name in what ships (the clean-room rule, CLAUDE.md).
