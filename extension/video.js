@@ -1076,7 +1076,7 @@ button:focus-visible { outline: none; }
   // to MDM as a file.
   const looks = new Map();
   // Shown this long over the same video first: previews the pointer only crosses aren't looked up.
-  const LOOK_DELAY_MS = 600;
+  const LOOK_DELAY_MS = 150;
   // An answer that isn't a look-up's (no MDM, an older one, too many at once) is asked again after
   // this; meanwhile a click goes to MDM's window, as it did before.
   const LOOK_RETRY_MS = 15000;
@@ -1163,6 +1163,36 @@ button:focus-visible { outline: none; }
     return l;
   }
 
+  // Prepare qualities as soon as a real, visible video starts playing. This runs independently
+  // of the overlay hover interaction, so the first click can use a lookup already in progress.
+  // Keep at most two prewarm lookups active, matching the app's bounded extractor capacity.
+  const prewarmedPlayers = new WeakSet();
+  let prewarmInFlight = 0;
+  function prewarmPlayer(v) {
+    if (!(v instanceof HTMLVideoElement) || prewarmInFlight >= 2 || prewarmedPlayers.has(v)) return;
+    if (!eligible(v) || v.paused || v.ended || v.readyState < 2) return;
+    const rect = v.getBoundingClientRect();
+    if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= innerHeight || rect.left >= innerWidth) return;
+    const candidate = describeNow(v);
+    if (!candidate.key || candidate.d.drm || (candidate.d.src && !STREAM.test(candidate.d.src))) return;
+    const existing = looks.get(candidate.key);
+    if (usable(existing)) return;
+    prewarmedPlayers.add(v);
+    prewarmInFlight += 1;
+    Promise.resolve(ask())
+      .then(async () => {
+        if (!allowed || !v.isConnected || v.paused || v.ended || !eligible(v)) return;
+        const currentCandidate = describeNow(v);
+        if (currentCandidate.key !== candidate.key) return;
+        const lookup = startLook(currentCandidate);
+        if (lookup && lookup.done) await lookup.done;
+      })
+      .catch(() => {})
+      .finally(() => {
+        prewarmedPlayers.delete(v);
+        prewarmInFlight = Math.max(0, prewarmInFlight - 1);
+      });
+  }
   // The look-up starts once the button stayed a moment over the same video.
   // (Asked again for the same video, as each move of the pointer does, the wait goes on.)
   let lookingFor = null;
@@ -2121,13 +2151,23 @@ button:focus-visible { outline: none; }
     cancelAnimationFrame(raf);
     cancelAnimationFrame(scan);
     removeEventListener("pointermove", onMove, true);
+    removeEventListener("playing", onMediaReady, true);
+    removeEventListener("loadedmetadata", onMediaReady, true);
     removeEventListener("keydown", onTab, true);
     root.remove();
     never = true;
     allowed = false;
     video = null;
   }
+  const onMediaReady = (event) => {
+    if (event.target instanceof HTMLVideoElement) prewarmPlayer(event.target);
+  };
   globalThis.__mdmVideoButton = { alive: () => Boolean(ext.runtime?.id), teardown };
+  addEventListener("playing", onMediaReady, { capture: true, passive: true });
+  addEventListener("loadedmetadata", onMediaReady, { capture: true, passive: true });
+  for (const player of videos) {
+    if (!player.paused) prewarmPlayer(player);
+  }
   addEventListener("pointermove", onMove, { capture: true, passive: true });
   addEventListener("pointerdown", (e) => {
     if (menuOpen && !e.composedPath().includes(root)) closeMenu();

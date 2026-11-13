@@ -41,6 +41,7 @@ function fakeApi({
   proxyGranted = false,
   proxyAnswer = true,
   proxyOn = false,
+  nativePort = false,
   noticeReply,
   // The host's answer to the video button's lookups (`videoLookup`, `videoPoll`, `videoPick`): a
   // function of the message; none: `reply`.
@@ -77,6 +78,21 @@ function fakeApi({
   };
   if (firefox) downloads.onCreated = event("created");
   else downloads.onDeterminingFilename = event("determining");
+  const nativeAnswer = async (name, m) => {
+    if (!host) throw new Error("Specified native messaging host not found.");
+    let result;
+    if (m.rules) {
+      calls.push(["rules", m]);
+      result = rulesReply || { ok: true, version: "0.2.5", types, capture: true, excludedSites: "*.update.microsoft.com", excludedAddresses: [], opened: true, ...rules };
+    } else {
+      calls.push(["native", name, m]);
+      if (m.panel) result = { ok: typeof panelOn === "function" ? panelOn(m) : panelOn !== false };
+      else if (m.declined) result = noticeReply || { ok: true };
+      else if (lookup && (m.videoLookup || m.videoPoll || m.videoPick)) result = lookup(m);
+      else result = reply;
+    }
+    return { ...result, ...(m.requestId ? { requestId: m.requestId } : {}) };
+  };
   const api = {
     downloads,
     storage: {
@@ -130,23 +146,24 @@ function fakeApi({
       onRemoved: event("permRemoved"),
     },
     runtime: {
-      sendNativeMessage: async (name, m) => {
-        if (!host) throw new Error("Specified native messaging host not found.");
-        if (m.rules) {
-          calls.push(["rules", m]);
-          // `rulesReply`: the whole answer, as an older app's host gives it.
-          if (rulesReply) return rulesReply;
-          return { ok: true, version: "0.2.5", types, capture: true, excludedSites: "*.update.microsoft.com", excludedAddresses: [], opened: true, ...rules };
-        }
-        calls.push(["native", name, m]);
-        // The video button: "may it show" follows `panelOn` (a function: the app's answer now).
-        if (m.panel) return { ok: typeof panelOn === "function" ? panelOn(m) : panelOn !== false };
-        // A notice of a download left alone (#208): an older host, which knows none, takes it
-        // for an address it can't download (`noticeReply`).
-        if (m.declined) return noticeReply || { ok: true };
-        if (lookup && (m.videoLookup || m.videoPoll || m.videoPick)) return lookup(m);
-        return reply;
-      },
+      sendNativeMessage: async (name, m) => nativeAnswer(name, m),
+      ...(nativePort ? {
+        connectNative: (name) => {
+          calls.push(["connectNative", name]);
+          const messageListeners = [];
+          const disconnectListeners = [];
+          return {
+            onMessage: { addListener: (fn) => messageListeners.push(fn) },
+            onDisconnect: { addListener: (fn) => disconnectListeners.push(fn) },
+            postMessage: (m) => {
+              Promise.resolve().then(() => nativeAnswer(name, m)).then(
+                (answer) => messageListeners.forEach((fn) => fn(answer)),
+                () => disconnectListeners.forEach((fn) => fn()),
+              );
+            },
+          };
+        },
+      } : {}),
       getManifest: () => ({
         version: "0.2.5",
         content_scripts: [{ js: ["video.js"], ...(videoExcludes ? { exclude_matches: videoExcludes } : {}) }, { js: ["page.js"] }],
@@ -3025,6 +3042,25 @@ const ask = (listeners) => (m, sender) => new Promise((r) => listeners.message(m
   t = await run({ safari: false, taken: true });
   assert.ok(!t.click("https://x.test/f/a.zip").e.defaultPrevented, "Chrome and Firefox take it from the downloads API");
   ok("Safari: page.js holds a click on a listed file type, never Alt or other types");
+}
+// Chromium's persistent native port is reused for startup rules and download handoff.
+{
+  const { api, calls, listeners } = fakeApi({ firefox: false, nativePort: true });
+  load(api, false);
+  await settle();
+  let suggested = false;
+  listeners.determining(
+    { id: 91, url: "https://x.test/instant.zip", filename: "instant.zip" },
+    () => (suggested = true),
+  );
+  await settle();
+  const connects = calls.filter((call) => call[0] === "connectNative");
+  const requests = natives(calls);
+  assert.equal(connects.length, 1, "one long-lived native connection is reused");
+  assert.ok(requests.some((message) => typeof message.requestId === "string"), "request IDs correlate replies");
+  assert.ok(!suggested, "the browser download is cancelled only after the host accepts it");
+  assert.deepEqual(steps(calls), ["cancel", "erase"]);
+  ok("Chromium: persistent native port reused for instant handoff");
 }
 assert.deepEqual(complaints, [], "nothing written to the console as an error or warning");
 

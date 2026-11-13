@@ -1,0 +1,83 @@
+name: Windows app and browser extensions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "extension/**"
+      - "tools/installer/**"
+      - "tools/extension/**"
+      - ".github/workflows/windows-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows installer and browser extensions
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain
+        shell: pwsh
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-release-${{ hashFiles('Cargo.lock') }}
+          restore-keys: windows-release-
+
+      - name: NASM
+        shell: pwsh
+        run: |
+          choco install nasm --version 2.16.3 --no-progress -y
+          "C:\Program Files\NASM" >> $env:GITHUB_PATH
+
+      - name: Inno Setup 6
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y
+          }
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      - name: Extension logic tests
+        run: node tools/extension/test.mjs
+
+      - name: Build Windows installer, portable packages and browser extensions
+        shell: pwsh
+        run: ./tools/installer/build.ps1
+
+      - name: Validate browser extension packages
+        run: node tools/extension/check-pack.mjs
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: MisterDownloadManager-Windows-and-Extensions
+          if-no-files-found: error
+          path: |
+            target/dist/*
+            target/extension/mdm-chromium.zip
+            target/extension/mdm-firefox.xpi
+            target/extension/mdm-chrome-store.zip

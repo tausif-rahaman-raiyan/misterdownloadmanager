@@ -70,6 +70,8 @@ const CHROME_EXTERNAL_KEY: &str = r"Software\Google\Chrome\Extensions";
 #[derive(Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 struct Message {
+    /// Correlates a persistent native-messaging port response with its request.
+    request_id: Option<String>,
     /// Only asking for the capture rules (the file types to offer). `hello` (the extension
     /// installed, or the browser started) asks the same and tells the app it is there.
     rules: bool,
@@ -230,6 +232,9 @@ struct Notice {
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Reply {
+    /// Correlates this reply with a persistent native-messaging request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
@@ -1090,9 +1095,12 @@ fn serve() -> io::Result<()> {
         let reply = match serde_json::from_slice::<Message>(&raw) {
             // The rules as saved now: a change in Options applies to the next download.
             Ok(m) => {
+                let request_id = m.request_id.clone();
                 // This browser has the extension: the app stops offering it (extension.rs).
                 mdm_ipc::extension::mark_seen(browser(&m), m.v.as_deref().unwrap_or_default());
-                answer(m, &mdm_ipc::capture::CaptureRules::load())
+                let mut reply = answer(m, &mdm_ipc::capture::CaptureRules::load());
+                reply.request_id = request_id;
+                reply
             }
             Err(e) => Reply::failed("refused", e.to_string()),
         };
@@ -1490,6 +1498,15 @@ mod tests {
         assert!(!our_caller(&[
             "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/".into()
         ]));
+    }
+
+    #[test]
+    fn persistent_native_request_ids_are_echoed() {
+        let message: Message = serde_json::from_str(r#"{"requestId":"request-17"}"#).unwrap();
+        let mut reply = Reply::done();
+        reply.request_id = message.request_id;
+        let value = serde_json::to_value(reply).unwrap();
+        assert_eq!(value["requestId"], "request-17");
     }
 
     #[test]

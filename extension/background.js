@@ -58,6 +58,70 @@ function hostProblem(error) {
 // Every message says which browser and extension version it comes from (the app keeps each
 // browser's status, and the rules depend on the browser). Never throws: failures come back as
 // `{ok: false, why}`.
+// A reusable native connection avoids starting a fresh host process for every message.
+let nativePort = null;
+let nativePortSequence = 0;
+const nativePending = new Map();
+
+function openNativePort() {
+  if (nativePort) return nativePort;
+  const port = ext.runtime.connectNative(HOST);
+  nativePort = port;
+  port.onMessage.addListener((reply) => {
+    let foundId = reply && typeof reply.requestId === "string" ? reply.requestId : "";
+    let pending = foundId ? nativePending.get(foundId) : null;
+    // Older hosts return no requestId. Their stdio loop answers in request order.
+    if (!pending) {
+      for (const [id, waiting] of nativePending) {
+        if (waiting.port === port) { foundId = id; pending = waiting; break; }
+      }
+    }
+    if (!pending || pending.port !== port) return;
+    nativePending.delete(foundId);
+    clearTimeout(pending.timer);
+    pending.resolve(reply || {});
+  });
+  port.onDisconnect.addListener(() => {
+    const reason = (ext.runtime.lastError && ext.runtime.lastError.message) || "native host disconnected";
+    if (nativePort === port) nativePort = null;
+    for (const [id, pending] of nativePending) {
+      if (pending.port !== port) continue;
+      nativePending.delete(id);
+      clearTimeout(pending.timer);
+      pending.reject(new Error(reason));
+    }
+  });
+  return port;
+}
+
+function requestNativeHost(message, ms) {
+  // Safari's extension bridge and older browser implementations retain the one-message API.
+  if (SAFARI || typeof ext.runtime.connectNative !== "function") {
+    return withTimeout(ext.runtime.sendNativeMessage(HOST, message), ms);
+  }
+  let port;
+  try {
+    port = openNativePort();
+  } catch {
+    // If the persistent API itself cannot be opened, preserve the existing compatibility path.
+    return withTimeout(ext.runtime.sendNativeMessage(HOST, message), ms);
+  }
+  const requestId = Date.now().toString(36) + "-" + (++nativePortSequence).toString(36);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      nativePending.delete(requestId);
+      reject(new Error("no answer"));
+    }, ms);
+    nativePending.set(requestId, { port, resolve, reject, timer });
+    try {
+      port.postMessage({ ...message, requestId });
+    } catch (error) {
+      clearTimeout(timer);
+      nativePending.delete(requestId);
+      reject(error);
+    }
+  });
+}
 async function native(message, ms = HOST_WAIT) {
   // A download for another MDM (a server, #157): sent there, not to this computer's.
   if (typeof message.url === "string" && message.url) {
@@ -68,7 +132,7 @@ async function native(message, ms = HOST_WAIT) {
   const brands = app ? [...BRANDS, app] : BRANDS;
   const sent = { ...message, userAgent: navigator.userAgent, brands, v: VERSION };
   try {
-    const reply = (await withTimeout(ext.runtime.sendNativeMessage(HOST, sent), ms)) || {};
+    const reply = (await requestNativeHost(sent, ms)) || {};
     if (reply.version) {
       await noteStatus(older(reply.version, VERSION) ? "update-app" : null, reply.version);
       // The answer to `rules` also says whether the app looks videos up for the button.
@@ -1480,11 +1544,15 @@ async function browserProxy(url, incognito) {
 // `explicit`: the user asked for this one (the right-click item), so Options' automatic-capture
 // rules (file types, excluded sites) don't apply; the host checks them for everything else.
 async function handOff(d) {
+  const [cookies, proxy] = await Promise.all([
+    cookieHeader(d.url, d),
+    browserProxy(d.finalUrl || d.url, d.incognito),
+  ]);
   const message = {
     url: d.url,
     finalUrl: d.finalUrl && d.finalUrl !== d.url ? d.finalUrl : "",
     referrer: d.referrer || "",
-    cookies: await cookieHeader(d.url, d),
+    cookies,
     filename: d.filename || "",
     ...(d.size > 0 ? { size: d.size } : {}),
     ...(d.mime ? { mime: d.mime } : {}),
@@ -1494,7 +1562,7 @@ async function handOff(d) {
     // A page's media from the popup's list (#800): its page's title, for a name the address lacks.
     ...(d.title ? { title: d.title } : {}),
     // Through the browser's proxy too (#42): the one its own request for the file took.
-    ...(await browserProxy(d.finalUrl || d.url, d.incognito)),
+    ...proxy,
   };
   return native(message);
 }
