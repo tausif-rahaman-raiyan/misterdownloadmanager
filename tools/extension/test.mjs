@@ -5,6 +5,7 @@ import vm from "node:vm";
 import assert from "node:assert/strict";
 
 const code = readFileSync(new URL("../../extension/background.js", import.meta.url), "utf8");
+const videoCode = readFileSync(new URL("../../extension/video.js", import.meta.url), "utf8");
 const DEFAULT_TYPES = "3GP 7Z AAC EXE ISO MP3 MP4 MSI PDF R0* RAR ZIP";
 
 // A fake extension API; `firefox` picks which download event exists. `reply` is the app's
@@ -3062,6 +3063,14 @@ const ask = (listeners) => (m, sender) => new Promise((r) => listeners.message(m
   assert.deepEqual(steps(calls), ["cancel", "erase"]);
   ok("Chromium: persistent native port reused for instant handoff");
 }
+// Video detection is local-only: no automatic app lookups while hovering or playing.
+assert.ok(!videoCode.includes("prewarmPlayer("), "no automatic video prewarm");
+assert.ok(!videoCode.includes('send({ type: "video-lookup"'), "no page-time video lookup");
+assert.ok(!videoCode.includes('send({ type: "panel" })'), "no app query just to show the icon");
+assert.ok(videoCode.includes("function onForceKeyDown"), "Shift force-detection shortcut exists");
+assert.ok(videoCode.includes("function onForceKeyUp"), "Shift release ends forced display");
+assert.ok(videoCode.includes("return await useWindow(j);"), "click hands video details to the app window");
+assert.ok(!videoCode.includes('"looking"'), "extension does not show a page-lookup state");
 assert.deepEqual(complaints, [], "nothing written to the console as an error or warning");
 
 console.log(`extension: ${passed} checks passed`);

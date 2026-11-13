@@ -776,13 +776,9 @@
   // again when older than ASK_MS, so a change in Options reaches a page already open (#532: one
   // that never reloads, as YouTube's, kept the button for good). `never`: this page's own
   // "Never on this site".
-  let allowed = null;
-  let askedAt = 0;
-  let asking = null;
+  let allowed = true;
   let never = false;
   let placed = false;
-  const ASK_MS = 5000;
-  const answered = () => allowed !== null && Date.now() - askedAt < ASK_MS;
   let place = { x: 1, y: 0 }; // where on the edge: fractions of the room, top right by default
   let chosen = false; // the user put it where it is (dragged it, on this site): theirs, never moved for a page's control
   let auto = { v: null, at: null, t: 0 }; // the spot found for this video, kept for a moment
@@ -802,6 +798,7 @@
   let lastMove = 0;
   let pointer = { x: -1, y: -1 };
   let menuOpen = false;
+  let forceHeld = false;
   let dragging = null;
   let busy = false;
   let raf = 0;
@@ -1128,71 +1125,13 @@ button:focus-visible { outline: none; }
 
   // Starts the look-up of what the button sends for `c` (none for a plain file, a protected video
   // or one nothing names), unless one is kept. `l.done` resolves once it ended.
-  function startLook(c) {
-    if (!c || !c.key || c.d.drm || (c.d.src && !STREAM.test(c.d.src))) return null;
-    const kept = looks.get(c.key);
-    if (usable(kept)) return kept;
-    const og = location.href === landedAt ? document.querySelector('meta[property="og:title"]')?.content : "";
-    const asked = { src: c.d.src, title: (og || document.title || "").trim(), url: c.d.url, at: c.d.at };
-    const l = { state: "pending", at: Date.now(), href: location.href, asked };
-    looks.set(c.key, l);
-    const alive = () => looks.get(c.key) === l && location.href === l.href;
-    l.done = (async () => {
-      const r = await within(send({ type: "video-lookup", ...asked }), LOOKUP_MS);
-      if (r && r.show) l.show = String(r.show);
-      if (r && r.post) l.post = String(r.post);
-      let s = replyState(r) || { state: "gone" };
-      if (s.state === "pending") {
-        s =
-          (await followLookup(s, {
-            ask: (token, ms) => within(send({ type: "video-poll", token }), ms),
-            alive,
-            sleep: (ms) => new Promise((wake) => setTimeout(wake, ms)),
-            now: Date.now,
-            end: l.at + LOOKUP_MS,
-          })) || { state: "gone" };
-      }
-      Object.assign(l, s, { at: Date.now() });
-      if (alive() && current && current.key === c.key) {
-        render();
-        if (menuOpen) fillMenu();
-      }
-      return l;
-    })();
-    render();
-    return l;
-  }
+  function startLook(c) { return null; }
 
   // Prepare qualities as soon as a real, visible video starts playing. This runs independently
   // of the overlay hover interaction, so the first click can use a lookup already in progress.
   // Keep at most two prewarm lookups active, matching the app's bounded extractor capacity.
   const prewarmedPlayers = new WeakSet();
   let prewarmInFlight = 0;
-  function prewarmPlayer(v) {
-    if (!(v instanceof HTMLVideoElement) || prewarmInFlight >= 2 || prewarmedPlayers.has(v)) return;
-    if (!eligible(v) || v.paused || v.ended || v.readyState < 2) return;
-    const rect = v.getBoundingClientRect();
-    if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= innerHeight || rect.left >= innerWidth) return;
-    const candidate = describeNow(v);
-    if (!candidate.key || candidate.d.drm || (candidate.d.src && !STREAM.test(candidate.d.src))) return;
-    const existing = looks.get(candidate.key);
-    if (usable(existing)) return;
-    prewarmedPlayers.add(v);
-    prewarmInFlight += 1;
-    Promise.resolve(ask())
-      .then(async () => {
-        if (!allowed || !v.isConnected || v.paused || v.ended || !eligible(v)) return;
-        const currentCandidate = describeNow(v);
-        if (currentCandidate.key !== candidate.key) return;
-        const lookup = startLook(currentCandidate);
-        if (lookup && lookup.done) await lookup.done;
-      })
-      .catch(() => {})
-      .finally(() => {
-        prewarmedPlayers.delete(v);
-        prewarmInFlight = Math.max(0, prewarmInFlight - 1);
-      });
-  }
   // The look-up starts once the button stayed a moment over the same video.
   // (Asked again for the same video, as each move of the pointer does, the wait goes on.)
   let lookingFor = null;
@@ -1233,7 +1172,7 @@ button:focus-visible { outline: none; }
   function render() {
     const c = video ? describeNow(video) : null;
     const look = lookOf(c);
-    const state = status ? status.state : c && c.d.drm ? "drm" : look && look.state === "pending" ? "looking" : "ready";
+    const state = status ? status.state : c && c.d.drm ? "drm" : "ready";
     pill.dataset.state = state;
     let text = idleLabel;
     let small = "";
@@ -1514,7 +1453,6 @@ button:focus-visible { outline: none; }
     if (!attach()) return hide(true);
     root.style.setProperty("display", "block", "important");
     const c = describeNow(v);
-    if (!usable(looks.get(c.key))) scheduleLook(v);
     if (pill.dataset.key !== String(c.key) || !fullWidth) {
       pill.dataset.key = String(c.key);
       render();
@@ -1595,7 +1533,7 @@ button:focus-visible { outline: none; }
     const r = video.getBoundingClientRect();
     const over =
       pointer.x >= r.left && pointer.x <= r.right && pointer.y >= r.top && pointer.y <= r.bottom;
-    if (!onButton && !menuOpen && !dragging && !keyboardOn() && (!over || Date.now() - lastMove > IDLE_MS)) {
+    if (!forceHeld && !onButton && !menuOpen && !dragging && !keyboardOn() && (!over || Date.now() - lastMove > IDLE_MS)) {
       return hide();
     }
     position();
@@ -1614,45 +1552,13 @@ button:focus-visible { outline: none; }
 
   function look() {
     scan = 0;
-    if (dragging || never || (allowed === false && answered())) return;
-    // Kept on its video while its menu is open (pointerTarget).
+    if (dragging || never) return;
+    // Passive detection is local; the app is contacted only after the user clicks.
     const v = pointerTarget(videoAt(pointer.x, pointer.y), video, menuOpen);
-    if (!v) return;
-    if (!answered()) return void ask().then(() => allowed && look());
-    show(v);
+    if (v) show(v);
   }
 
   // One question at a time; while it is out, the button waits for its answer.
-  function ask() {
-    if (never) {
-      allowed = false;
-      return Promise.resolve();
-    }
-    if (answered()) return Promise.resolve();
-    asking = asking || send({ type: "panel" }).then(async (r) => {
-      allowed = !never && Boolean(r && r.on);
-      askedAt = Date.now();
-      // Switched off meanwhile: gone now, unless the menu, a drag or its "Turn on" has it in hand.
-      if (!allowed && video && !menuOpen && !dragging && !(status && status.state === "off")) {
-        video = null;
-        hide(true);
-      }
-      if (allowed && !placed) {
-        placed = true;
-        try {
-          const { positions } = await ext.storage.local.get({ positions: {} });
-          if (positions[host]) {
-            place = snap(positions[host]);
-            chosen = true;
-          }
-        } catch {
-          // Default spot.
-        }
-      }
-    }).finally(() => (asking = null));
-    return asking;
-  }
-
   // ---- the hover tip ------------------------------------------------------------------------
   let tipTimer = 0;
   const TIP_MS = 500;
@@ -1704,23 +1610,9 @@ button:focus-visible { outline: none; }
       const og = location.href === landedAt ? document.querySelector('meta[property="og:title"]')?.content : "";
       const title = (og || document.title || "").trim();
       const j = { video, src: video.currentSrc || "", href: location.href, asked: { src: d.src, title, url: d.url, at: d.at }, row, toWindow };
-      const c = { v: video, d, key: lookKey(d) };
-      let l = lookOf(c);
+      // Send the captured video context immediately. MDM owns extraction, formats and quality selection.
       setStatus({ state: "sending", text: t("video_sending") });
-      if (toWindow) return await useWindow(j);
-      if (l && l.file) return await useWindow(j, { direct: true, words: qualityName(l, t) });
-      if (!usable(l)) l = startLook(c);
-      if (!l) return await useWindow(j);
-      if (l.state === "pending") await within(l.done, LOOKUP_MS);
-      const a = lookupAction(l, t);
-      if (a.act === "flash") return showFlash(a, l);
-      // The post a video in a feed sits in, which can't be looked up from here (#689): opening
-      // the post is the user's step ("Open post"; the menu's "All qualities…" still has the window).
-      if (a.act !== "offer" && l.post && l.state === "failed") return showFlash({ kind: "warn", text: t("video_open_post") }, l);
-      if (a.act !== "offer") return await useWindow(j);
-      const choices = l.choices;
-      const i = row && Number.isInteger(row.choice) ? row.choice : choices.indexOf(bestOf(l));
-      return await pick(j, l, Math.max(0, i));
+      return await useWindow(j);
     } finally {
       busy = false;
     }
@@ -2151,6 +2043,8 @@ button:focus-visible { outline: none; }
     cancelAnimationFrame(raf);
     cancelAnimationFrame(scan);
     removeEventListener("pointermove", onMove, true);
+    removeEventListener("keydown", onForceKeyDown, true);
+    removeEventListener("keyup", onForceKeyUp, true);
     removeEventListener("playing", onMediaReady, true);
     removeEventListener("loadedmetadata", onMediaReady, true);
     removeEventListener("keydown", onTab, true);
@@ -2159,15 +2053,40 @@ button:focus-visible { outline: none; }
     allowed = false;
     video = null;
   }
-  const onMediaReady = (event) => {
-    if (event.target instanceof HTMLVideoElement) prewarmPlayer(event.target);
-  };
   globalThis.__mdmVideoButton = { alive: () => Boolean(ext.runtime?.id), teardown };
-  addEventListener("playing", onMediaReady, { capture: true, passive: true });
-  addEventListener("loadedmetadata", onMediaReady, { capture: true, passive: true });
-  for (const player of videos) {
-    if (!player.paused) prewarmPlayer(player);
+  // Shift force-show: local scan only; no native messaging until the button is clicked.
+  const typingTarget = (target) => target instanceof Element &&
+    (target.matches("input, textarea, select, [contenteditable='true']") || target.closest("[contenteditable='true']"));
+  function forceShowAtPointer() {
+    if (never || dragging) return;
+    let candidate = videoAt(pointer.x, pointer.y);
+    if (!candidate) {
+      candidate = [...videos, ...audios, ...shadowVideos()].filter((v) => {
+        if (!eligible(v)) return false;
+        const r = v.getBoundingClientRect();
+        return r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
+      }).sort((a, b) => {
+        const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
+        return br.width * br.height - ar.width * ar.height;
+      })[0] || null;
+    }
+    if (candidate) {
+      forceHeld = true;
+      lastMove = Date.now();
+      show(candidate);
+    }
   }
+  function onForceKeyDown(e) {
+    if (e.isTrusted && e.key === "Shift" && !e.repeat && !typingTarget(e.target)) forceShowAtPointer();
+  }
+  function onForceKeyUp(e) {
+    if (e.key !== "Shift" || !forceHeld) return;
+    forceHeld = false;
+    if (video && !root.matches(":hover") && !menuOpen && !keyboardOn()) hide();
+  }
+  addEventListener("keydown", onForceKeyDown, true);
+  addEventListener("keyup", onForceKeyUp, true);
+  addEventListener("blur", () => { forceHeld = false; }, true);
   addEventListener("pointermove", onMove, { capture: true, passive: true });
   addEventListener("pointerdown", (e) => {
     if (menuOpen && !e.composedPath().includes(root)) closeMenu();
@@ -2175,20 +2094,6 @@ button:focus-visible { outline: none; }
   // A video with the keyboard's focus, or a player around one (its controls), gets the button
   // too, kept while the focus stays there; Tab goes from there to the button. Not the focus a
   // click gives (#741): a click that plays or pauses the video shows nothing.
-  addEventListener("focusin", (e) => {
-    if (!(e.target instanceof Element) || e.composedPath().includes(root)) return;
-    const t = e.target;
-    if (!t.matches(":focus-visible")) return;
-    const v =
-      t instanceof HTMLMediaElement ? t : [...t.querySelectorAll("video, audio")].find(eligible) || null;
-    if (!v || !eligible(v)) return;
-    focusedPlayer = t;
-    ask().then(() => {
-      if (!allowed) return;
-      lastMove = Date.now();
-      show(v);
-    });
-  }, true);
   // Tab on the focused player moves into the button first; Tab from the button goes back to
   // the player and on from there (its own controls next), as if the button sat at its start.
   let tabOn = 0;
