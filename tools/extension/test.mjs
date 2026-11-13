@@ -1544,7 +1544,7 @@ const MPD = (protect) => `<?xml version="1.0"?>
 // video.js's videoPage, with what it calls (from it to its end mark), run against `location` and
 // `document`: the address the button hands the app for a <video>.
 const videoPageOn = (() => {
-  const source = readFileSync(new URL("../../extension/video.js", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../../extension/video.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const start = source.indexOf("function videoPage(v) {");
   const end = source.indexOf("// ---- the video's own address: end.");
   assert.ok(start > 0 && end > start, "video.js has videoPage and its end mark");
@@ -2120,7 +2120,8 @@ function samplePage(html) {
   // #741: only the pointer really moving shows it (a repeated move, as a browser sends when the
   // page changes under a still pointer on pause or play, doesn't), nor the focus a click gives.
   assert.ok(fn("onMove").startsWith("function onMove(e) {\n    if (e.clientX === pointer.x && e.clientY === pointer.y) return;"), "onMove: a move in place is no move");
-  assert.ok(source.includes('if (!t.matches(":focus-visible")) return;'), "focusin: the keyboard's focus only");
+  assert.ok(fn("onForceKeyDown").includes("forceHeld = true"), "Shift force-detection starts while held");
+  assert.ok(fn("onForceKeyUp").includes("forceHeld = false"), "Shift force-detection ends on release");
   assert.ok(/const IDLE_MS = 1500;/.test(source), "fades 1.5 s after the pointer rests");
   // Its texts: English's, kept as the fallback too.
   const english = JSON.parse(readFileSync(new URL("../../extension/_locales/en/messages.json", import.meta.url), "utf8"));
