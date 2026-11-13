@@ -2120,7 +2120,7 @@ function samplePage(html) {
   // #741: only the pointer really moving shows it (a repeated move, as a browser sends when the
   // page changes under a still pointer on pause or play, doesn't), nor the focus a click gives.
   assert.ok(fn("onMove").startsWith("function onMove(e) {\n    if (e.clientX === pointer.x && e.clientY === pointer.y) return;"), "onMove: a move in place is no move");
-  assert.ok(fn("onForceKeyDown").includes("forceHeld = true"), "Shift force-detection starts while held");
+  assert.ok(fn("onForceKeyDown").includes("forceShowAtPointer()"), "Shift keydown invokes local force detection");
   assert.ok(fn("onForceKeyUp").includes("forceHeld = false"), "Shift force-detection ends on release");
   assert.ok(/const IDLE_MS = 1500;/.test(source), "fades 1.5 s after the pointer rests");
   // Its texts: English's, kept as the fallback too.
