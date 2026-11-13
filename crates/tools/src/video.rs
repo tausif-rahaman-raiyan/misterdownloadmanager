@@ -1134,7 +1134,11 @@ fn watch_merge(
         };
         let mut p = progress.lock().unwrap();
         if p.merging.is_some() && p.downloaded > 0 {
-            p.merging = Some(Some(merge_fraction(len, p.downloaded)));
+            // A platform's muxer may briefly recreate or truncate its temporary output. Keep
+            // the visible merge progress monotonic while the same merge is still underway.
+            let current = merge_fraction(len, p.downloaded);
+            let previous = p.merging.flatten().unwrap_or(0.0);
+            p.merging = Some(Some(previous.max(current)));
         }
     }
 }
