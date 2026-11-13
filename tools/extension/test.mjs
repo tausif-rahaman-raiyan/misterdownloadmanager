@@ -1181,7 +1181,18 @@ const MPD = (protect) => `<?xml version="1.0"?>
   assert.equal((await saved(bare))[0], "Movie the title.webm");
   // The popup's tag is the saved file's type (popup.js tagOf), its name the saved one (nameOf).
   const popup = readFileSync(new URL("../../extension/popup.js", import.meta.url), "utf8");
-  const part = (name) => popup.slice(popup.indexOf(`function ${name}(`), popup.indexOf("\n}\n", popup.indexOf(`function ${name}(`)) + 2);
+  // Extract function bodies by balanced braces, independent of LF vs CRLF checkouts on Windows.
+  const part = (name) => {
+    const start = popup.indexOf("function " + name + "(");
+    assert.ok(start >= 0, "popup.js has " + name);
+    const open = popup.indexOf("{", start);
+    let depth = 0;
+    for (let i = open; i < popup.length; i += 1) {
+      if (popup[i] === "{") depth += 1;
+      if (popup[i] === "}" && --depth === 0) return popup.slice(start, i + 1);
+    }
+    throw new Error(name + ": no end");
+  };
   const shown = new Function(`const TYPES = {}; ${part("tagOf")}\n${part("nameOf")}\nreturn [tagOf, nameOf];`)();
   const [tagOf, nameOf] = shown;
   const listed = (await popupAsk(listeners, { type: "media", tab: 9 })).media;
@@ -2065,7 +2076,8 @@ function samplePage(html) {
   // after firstWindow, and each answer is read by lookupAction.
   assert.equal(source.split('send({ type: "video",').length, 2, "one place sends the window's message");
   assert.ok(/if \(!firstWindow\(j\)\) return;[^]*send\(\{ type: "video",/.test(fn("useWindow")), "useWindow: once per click");
-  for (const name of ["download", "pick", "fillMenu"]) assert.ok(fn(name).includes("lookupAction("), `${name} reads answers with lookupAction`);
+  assert.ok(fn("download").includes("return await useWindow(j);"), "download: immediately hands the video to the app");
+  assert.ok(!fn("download").includes("lookupAction("), "download: no page-side lookup result needed");
   assert.ok(fn("pick").includes("lookupAction(s, t, true)"), "pick: a choice's answer");
   // While the qualities' menu is open, the pointer over another video (a feed's next one, under
   // the menu) leaves the button on its own; over its own, or with no menu, it follows.
